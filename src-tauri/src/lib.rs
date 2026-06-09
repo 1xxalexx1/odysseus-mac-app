@@ -44,14 +44,24 @@ pub fn run() {
             });
             Ok(())
         })
-        .on_window_event(|_window, event| {
-            // Kill the server whenever the main window is destroyed (close button or Cmd+Q).
-            if let tauri::WindowEvent::Destroyed = event {
-                stop_server();
+        .on_window_event(|window, event| {
+            // Closing the only window should quit the app (and thus stop the
+            // server) rather than leave a headless process on macOS.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                window.app_handle().exit(0);
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_handle, event| {
+            // RunEvent::Exit fires however the app exits — Cmd+Q, Quit menu, or
+            // last window closed — including the clean Cocoa terminate that does
+            // NOT deliver a POSIX SIGTERM. This is the reliable place to reap
+            // the uvicorn child.
+            if let tauri::RunEvent::Exit = event {
+                stop_server();
+            }
+        });
 }
 
 extern "C" fn handle_sigterm(_: libc::c_int) {
