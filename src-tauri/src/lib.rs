@@ -63,9 +63,12 @@ fn start_and_wait(handle: AppHandle) {
     let dir = odysseus_dir();
     let uvicorn = uvicorn_bin();
 
-    // Kill any stale process already holding the port before we try to start.
+    // Kill any stale *server* already listening on the port before we start.
+    // -sTCP:LISTEN restricts the match to listeners (a crashed uvicorn), so we
+    // never kill clients that merely have a connection open to the port — e.g.
+    // a browser tab pointed at the local UI.
     let _ = Command::new("lsof")
-        .args(["-ti", &format!("tcp:{}", PORT)])
+        .args(["-ti", &format!("tcp:{}", PORT), "-sTCP:LISTEN"])
         .output()
         .map(|o| {
             let pids = String::from_utf8_lossy(&o.stdout);
@@ -134,9 +137,14 @@ fn start_and_wait(handle: AppHandle) {
     // Small grace period so the ASGI/HTTP stack fully initialises before we load it.
     std::thread::sleep(Duration::from_millis(600));
 
-    if let Some(window) = handle.get_webview_window("main") {
-        let _ = window.navigate(SERVER_URL.parse().unwrap());
-    }
+    // navigate() touches the webview, which on macOS must happen on the main
+    // thread. We're on a background worker here, so dispatch it across.
+    let nav_handle = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        if let Some(window) = nav_handle.get_webview_window("main") {
+            let _ = window.navigate(SERVER_URL.parse().unwrap());
+        }
+    });
 }
 
 fn stop_server() {
